@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -132,8 +133,20 @@ func handlePostAudio(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	// Define command line flag
+	addr := flag.String("addr", "", "Server address (default: :8080)")
+	flag.Parse()
+
+	// Get address from environment variable or command line flag
+	serverAddr := os.Getenv("SERVER_ADDR")
+	if *addr != "" {
+		serverAddr = *addr
+	}
+	if serverAddr == "" {
+		serverAddr = ":8080"
+	}
+
 	http.HandleFunc("/audio", handlePostAudio)
-	port := "8080"
-	log.Printf("Server starting on port %s...", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	log.Printf("Server starting on %s...", serverAddr)
+	log.Fatal(http.ListenAndServe(serverAddr, nil))
 }
