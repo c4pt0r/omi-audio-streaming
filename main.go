@@ -79,6 +79,36 @@ func saveFileLocally(storageDir string, fileName string, tempFilePath string) er
 	return nil
 }
 
+func mkdirAll(path string) error {
+	// Check if directory already exists
+	_, err := agfsClient.Stat(path)
+	if err == nil {
+		// Directory exists
+		return nil
+	}
+
+	// Get parent directory
+	parent := filepath.Dir(path)
+	if parent != "." && parent != "/" && parent != path {
+		// Recursively create parent directories
+		if err := mkdirAll(parent); err != nil {
+			return err
+		}
+	}
+
+	// Create current directory
+	err = agfsClient.Mkdir(path, 0755)
+	if err != nil {
+		// Check again if it exists (might have been created by another process)
+		_, statErr := agfsClient.Stat(path)
+		if statErr != nil {
+			return fmt.Errorf("failed to create directory %s: %v", path, err)
+		}
+	}
+
+	return nil
+}
+
 func uploadToAGFS(filePath string, fileName string) error {
 	if agfsClient == nil {
 		return fmt.Errorf("AGFS client not initialized")
@@ -90,10 +120,26 @@ func uploadToAGFS(filePath string, fileName string) error {
 		return fmt.Errorf("failed to read file: %v", err)
 	}
 
-	// Construct full path with upload path prefix
-	fullPath := fileName
+	// Get current time for path structure
+	now := time.Now()
+	year := fmt.Sprintf("%04d", now.Year())
+	month := fmt.Sprintf("%02d", int(now.Month()))
+	day := fmt.Sprintf("%02d", now.Day())
+	hour := fmt.Sprintf("%02d", now.Hour())
+
+	// Construct directory path and full file path
+	var dirPath, fullPath string
 	if agfsUploadPath != "" {
-		fullPath = filepath.Join(agfsUploadPath, fileName)
+		dirPath = filepath.Join(agfsUploadPath, year, month, day, hour)
+		fullPath = filepath.Join(dirPath, fileName)
+	} else {
+		dirPath = filepath.Join(year, month, day, hour)
+		fullPath = filepath.Join(dirPath, fileName)
+	}
+
+	// Recursively create directory structure if it doesn't exist
+	if err := mkdirAll(dirPath); err != nil {
+		return err
 	}
 
 	// Upload to AGFS
