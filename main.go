@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
+	agfs "github.com/c4pt0r/agfs/agfs-sdk/go"
 	"io"
 	"log"
 	"net/http"
@@ -16,6 +17,11 @@ const (
 	numChannels   = 1 // Mono audio
 	sampleRate    = 16000
 	bitsPerSample = 16 // 16 bits per sample
+)
+
+var (
+	agfsClient *agfs.Client
+	agfsUploadPath string
 )
 
 // CreateWAVHeader generates a WAV header for the given data length
@@ -70,6 +76,33 @@ func saveFileLocally(storageDir string, fileName string, tempFilePath string) er
 	}
 
 	log.Printf("File %s saved to local storage directory %s successfully.", fileName, storageDir)
+	return nil
+}
+
+func uploadToAGFS(filePath string, fileName string) error {
+	if agfsClient == nil {
+		return fmt.Errorf("AGFS client not initialized")
+	}
+
+	// Read file content
+	fileData, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %v", err)
+	}
+
+	// Construct full path with upload path prefix
+	fullPath := fileName
+	if agfsUploadPath != "" {
+		fullPath = filepath.Join(agfsUploadPath, fileName)
+	}
+
+	// Upload to AGFS
+	_, err = agfsClient.Write(fullPath, fileData)
+	if err != nil {
+		return fmt.Errorf("failed to upload to AGFS: %v", err)
+	}
+
+	log.Printf("File uploaded to AGFS at path: %s", fullPath)
 	return nil
 }
 
@@ -128,13 +161,25 @@ func handlePostAudio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Upload to AGFS if client is configured
+	if agfsClient != nil {
+		destPath := filepath.Join(storageDir, filename)
+		err = uploadToAGFS(destPath, filename)
+		if err != nil {
+			log.Printf("Failed to upload to AGFS: %v", err)
+			// Don't return error, just log it
+		}
+	}
+
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf("Audio bytes received and saved as %s", filename)))
 }
 
 func main() {
-	// Define command line flag
+	// Define command line flags
 	addr := flag.String("addr", "", "Server address (default: :8080)")
+	agfsAPIURL := flag.String("agfs-api-url", "", "AGFS client API URL")
+	agfsPath := flag.String("agfs-upload-path", "", "AGFS upload path (e.g., /s3fs/aws/dongxu/omi-recording/)")
 	flag.Parse()
 
 	// Get address from environment variable or command line flag
@@ -144,6 +189,18 @@ func main() {
 	}
 	if serverAddr == "" {
 		serverAddr = ":8080"
+	}
+
+	// Initialize AGFS client if API URL is provided
+	if *agfsAPIURL != "" {
+		agfsClient = agfs.NewClient(*agfsAPIURL)
+		agfsUploadPath = *agfsPath
+		log.Printf("AGFS client initialized with API URL: %s", *agfsAPIURL)
+		if agfsUploadPath != "" {
+			log.Printf("AGFS upload path: %s", agfsUploadPath)
+		}
+	} else {
+		log.Printf("AGFS API URL not provided, files will only be saved locally")
 	}
 
 	http.HandleFunc("/audio", handlePostAudio)
