@@ -147,27 +147,36 @@ func handlePostAudio(w http.ResponseWriter, r *http.Request) {
 	tempFile.Write(header)
 	tempFile.Write(body)
 
-	// Get storage directory from environment variable, default to "./audio_files"
-	storageDir := os.Getenv("AUDIO_STORAGE_DIR")
-	if storageDir == "" {
-		storageDir = "./audio_files"
-	}
-
-	// Save the file to local storage
-	err = saveFileLocally(storageDir, filename, tempFilePath)
-	if err != nil {
-		log.Printf("Failed to save file locally: %v", err)
-		http.Error(w, "Failed to save file to local storage", http.StatusInternalServerError)
-		return
-	}
-
 	// Upload to AGFS if client is configured
 	if agfsClient != nil {
-		destPath := filepath.Join(storageDir, filename)
-		err = uploadToAGFS(destPath, filename)
+		err = uploadToAGFS(tempFilePath, filename)
 		if err != nil {
 			log.Printf("Failed to upload to AGFS: %v", err)
-			// Don't return error, just log it
+			// Fall back to local storage if AGFS upload fails
+			storageDir := os.Getenv("AUDIO_STORAGE_DIR")
+			if storageDir == "" {
+				storageDir = "./audio_files"
+			}
+			err = saveFileLocally(storageDir, filename, tempFilePath)
+			if err != nil {
+				log.Printf("Failed to save file locally: %v", err)
+				http.Error(w, "Failed to save file", http.StatusInternalServerError)
+				return
+			}
+		} else {
+			log.Printf("File uploaded to AGFS successfully, skipping local storage")
+		}
+	} else {
+		// No AGFS configured, save to local storage
+		storageDir := os.Getenv("AUDIO_STORAGE_DIR")
+		if storageDir == "" {
+			storageDir = "./audio_files"
+		}
+		err = saveFileLocally(storageDir, filename, tempFilePath)
+		if err != nil {
+			log.Printf("Failed to save file locally: %v", err)
+			http.Error(w, "Failed to save file to local storage", http.StatusInternalServerError)
+			return
 		}
 	}
 
