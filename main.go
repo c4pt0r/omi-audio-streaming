@@ -1,8 +1,6 @@
 package main
 
 import (
-	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -11,9 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	"cloud.google.com/go/storage"
-	"google.golang.org/api/option"
 )
 
 const (
@@ -47,58 +42,33 @@ func createWAVHeader(dataLength int) []byte {
 	return header
 }
 
-func uploadFileToGCS(bucketName string, fileName string, filePath string) error {
-	ctx := context.Background()
-
-	// Create a storage client using the service account credentials from the environment variable
-	credsEnv := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
-	if credsEnv == "" {
-		return fmt.Errorf("GOOGLE_APPLICATION_CREDENTIALS_JSON environment variable is not set")
+func saveFileLocally(storageDir string, fileName string, tempFilePath string) error {
+	// Create storage directory if it doesn't exist
+	if err := os.MkdirAll(storageDir, 0755); err != nil {
+		return fmt.Errorf("failed to create storage directory: %v", err)
 	}
 
-	// Decode the base64 encoded credentials
-	creds, err := base64.StdEncoding.DecodeString(credsEnv)
+	// Define destination path
+	destPath := filepath.Join(storageDir, fileName)
+
+	// Copy file from temp location to storage directory
+	srcFile, err := os.Open(tempFilePath)
 	if err != nil {
-		return fmt.Errorf("failed to decode credentials: %v", err)
+		return fmt.Errorf("failed to open source file: %v", err)
 	}
+	defer srcFile.Close()
 
-	// Create a temporary file for the credentials
-	credsFile, err := os.CreateTemp("", "gcs-creds-*.json")
+	destFile, err := os.Create(destPath)
 	if err != nil {
-		return fmt.Errorf("failed to create temp file for credentials: %v", err)
+		return fmt.Errorf("failed to create destination file: %v", err)
 	}
-	defer os.Remove(credsFile.Name())
+	defer destFile.Close()
 
-	if _, err := credsFile.Write(creds); err != nil {
-		return fmt.Errorf("failed to write credentials to temp file: %v", err)
-	}
-	credsFile.Close()
-
-	// Create a storage client
-	client, err := storage.NewClient(ctx, option.WithCredentialsFile(credsFile.Name()))
-	if err != nil {
-		return fmt.Errorf("failed to create storage client: %v", err)
-	}
-	defer client.Close()
-
-	bucket := client.Bucket(bucketName)
-	f, err := os.Open(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to open file: %v", err)
-	}
-	defer f.Close()
-
-	wc := bucket.Object(fileName).NewWriter(ctx)
-	wc.ContentType = "audio/wav"
-
-	if _, err = io.Copy(wc, f); err != nil {
-		return fmt.Errorf("failed to write to bucket: %v", err)
-	}
-	if err := wc.Close(); err != nil {
-		return fmt.Errorf("failed to close Writer: %v", err)
+	if _, err := io.Copy(destFile, srcFile); err != nil {
+		return fmt.Errorf("failed to copy file: %v", err)
 	}
 
-	log.Printf("File %s uploaded to GCS bucket %s successfully.", fileName, bucketName)
+	log.Printf("File %s saved to local storage directory %s successfully.", fileName, storageDir)
 	return nil
 }
 
@@ -143,24 +113,22 @@ func handlePostAudio(w http.ResponseWriter, r *http.Request) {
 	tempFile.Write(header)
 	tempFile.Write(body)
 
-	// Get bucket name from environment variable
-	bucketName := os.Getenv("GCS_BUCKET_NAME")
-	if bucketName == "" {
-		log.Printf("GCS_BUCKET_NAME environment variable is not set")
-		http.Error(w, "GCS_BUCKET_NAME environment variable is not set", http.StatusInternalServerError)
-		return
+	// Get storage directory from environment variable, default to "./audio_files"
+	storageDir := os.Getenv("AUDIO_STORAGE_DIR")
+	if storageDir == "" {
+		storageDir = "./audio_files"
 	}
 
-	// Upload the file to Google Cloud Storage
-	err = uploadFileToGCS(bucketName, filename, tempFilePath)
+	// Save the file to local storage
+	err = saveFileLocally(storageDir, filename, tempFilePath)
 	if err != nil {
-		log.Printf("Failed to upload to GCS: %v", err)
-		http.Error(w, "Failed to upload to Google Cloud Storage", http.StatusInternalServerError)
+		log.Printf("Failed to save file locally: %v", err)
+		http.Error(w, "Failed to save file to local storage", http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf("Audio bytes received and uploaded as %s", filename)))
+	w.Write([]byte(fmt.Sprintf("Audio bytes received and saved as %s", filename)))
 }
 
 func main() {
